@@ -179,7 +179,9 @@ class BaseMethodIntrospector(object):
 
     def get_nickname(self):
         """ Returns the APIView's nickname """
-        return get_view_name(self.callback).replace(' ', '_')
+        view_name = get_view_name(self.callback).replace(' ', '_')
+        response = u'{}_{}'.format(view_name, self.method).lower()
+        return response
 
     def get_notes(self):
         """
