@@ -49,13 +49,15 @@ class SwaggerUIView(View):
         if not self.has_permission(request):
             return self.handle_permission_denied(request)
 
-        template_name = "rest_framework_swagger/index.html"
+        template_name = SWAGGER_SETTINGS.get('template_path')
         data = {
             'swagger_settings': {
                 'discovery_url': "%sapi-docs/" % request.build_absolute_uri(),
                 'api_key': SWAGGER_SETTINGS.get('api_key', ''),
+                'token_type': SWAGGER_SETTINGS.get('token_type'),
                 'enabled_methods': mark_safe(
-                    json.dumps(SWAGGER_SETTINGS.get('enabled_methods')))
+                    json.dumps(SWAGGER_SETTINGS.get('enabled_methods'))),
+                'doc_expansion': SWAGGER_SETTINGS.get('doc_expansion', ''),
             }
         }
         response = render_to_response(template_name, RequestContext(request, data))

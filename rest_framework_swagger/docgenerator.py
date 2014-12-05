@@ -35,6 +35,20 @@ class DocumentationGenerator(object):
 
         return api_docs
 
+    def get_introspector(self, api, apis):
+        path = api['path']
+        pattern = api['pattern']
+        callback = api['callback']
+        if callback.__module__ == 'rest_framework.decorators':
+            return WrappedAPIViewIntrospector(callback, path, pattern)
+        elif issubclass(callback, viewsets.ViewSetMixin):
+            patterns = [a['pattern'] for a in apis
+                        if a['callback'] == callback]
+            return ViewSetIntrospector(callback, path, pattern,
+                                       patterns=patterns)
+        else:
+            return APIViewIntrospector(callback, path, pattern)
+
     def get_operations(self, api, apis=None):
         """
         Returns docs for the allowed methods of an API endpoint
@@ -42,21 +56,10 @@ class DocumentationGenerator(object):
         if apis is None:
             apis = [api]
         operations = []
-        path = api['path']
-        pattern = api['pattern']
         callback = api['callback']
         callback.request = HttpRequest()
 
-        if str(callback) == \
-                "<class 'rest_framework.decorators.WrappedAPIView'>":
-            introspector = WrappedAPIViewIntrospector(callback, path, pattern)
-        elif issubclass(callback, viewsets.ViewSetMixin):
-            patterns = [a['pattern'] for a in apis
-                        if a['callback'] == callback]
-            introspector = ViewSetIntrospector(callback, path, pattern,
-                                               patterns=patterns)
-        else:
-            introspector = APIViewIntrospector(callback, path, pattern)
+        introspector = self.get_introspector(api, apis)
 
         for method_introspector in introspector:
             if not isinstance(method_introspector, BaseMethodIntrospector) or \
@@ -122,8 +125,8 @@ class DocumentationGenerator(object):
             # no readonly fields
             w_name = "Write{serializer}".format(serializer=serializer_name)
 
-            w_properties = dict((k, v) for k, v in data['fields'].items()
-                                if k not in data['read_only'])
+            w_properties = OrderedDict((k, v) for k, v in data['fields'].items()
+                                       if k not in data['read_only'])
 
             models[w_name] = {
                 'id': w_name,
@@ -135,8 +138,8 @@ class DocumentationGenerator(object):
             # no write_only fields
             r_name = serializer_name
 
-            r_properties = dict((k, v) for k, v in data['fields'].items()
-                                if k not in data['write_only'])
+            r_properties = OrderedDict((k, v) for k, v in data['fields'].items()
+                                       if k not in data['write_only'])
 
             models[r_name] = {
                 'id': r_name,
@@ -162,20 +165,12 @@ class DocumentationGenerator(object):
 
         Serializer might be ignored if explicitly told in docstring
         """
-        serializer = method_inspector.get_serializer_class()
+        serializer = method_inspector.get_response_serializer_class()
         doc_parser = method_inspector.get_yaml_parser()
-
-        docstring_serializer = doc_parser.get_serializer_class(
-            callback=method_inspector.callback
-        )
 
         if doc_parser.get_response_type() is not None:
             # Custom response class detected
             return None
-
-        if docstring_serializer is not None:
-            self.explicit_serializers.add(docstring_serializer)
-            serializer = docstring_serializer
 
         if doc_parser.should_omit_serializer():
             serializer = None
@@ -225,13 +220,15 @@ class DocumentationGenerator(object):
         serializers = set()
 
         for api in apis:
-            serializer = self._get_serializer_class(api['callback'], pattern=api['pattern'])
-            if serializer is not None:
-                serializers.add(serializer)
+            introspector = self.get_introspector(api, apis)
+            for method_introspector in introspector:
+                serializer = self._get_method_serializer(method_introspector)
+                if serializer is not None:
+                    serializers.add(serializer)
 
         return serializers
 
-    def _find_field_serializers(self, serializers):
+    def _find_field_serializers(self, serializers, found_serializers=set()):
         """
         Returns set of serializers discovered from fields
         """
@@ -241,6 +238,8 @@ class DocumentationGenerator(object):
             for name, field in fields.items():
                 if isinstance(field, BaseSerializer):
                     serializers_set.add(field)
+                    if field not in found_serializers:
+                        serializers_set.update(self._find_field_serializers((field.__class__, ), serializers_set))
 
         return serializers_set
 
@@ -257,7 +256,7 @@ class DocumentationGenerator(object):
             fields = serializer.get_fields()
 
         data = OrderedDict({
-            'fields': {},
+            'fields': OrderedDict(),
             'required': [],
             'write_only': [],
             'read_only': [],
@@ -279,8 +278,11 @@ class DocumentationGenerator(object):
             if data_type in BaseMethodIntrospector.PRIMITIVES:
                 data_format = BaseMethodIntrospector.PRIMITIVES.get(data_type)[0]
 
+            description = getattr(field, 'help_text', '')
+            if not description or description.strip() == '':
+                description = None
             f = {
-                'description': getattr(field, 'help_text', ''),
+                'description': description,
                 'type': data_type,
                 'format': data_format,
                 'required': getattr(field, 'required', False),
