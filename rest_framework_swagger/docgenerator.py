@@ -1,8 +1,10 @@
 """Generates API documentation by introspection."""
 from django.http import HttpRequest
+from django.core.urlresolvers import reverse
 
 from rest_framework import viewsets
 from rest_framework.serializers import BaseSerializer
+from rest_framework.serializers import HyperlinkedRelatedField
 
 from .introspectors import APIViewIntrospector, \
     WrappedAPIViewIntrospector, \
@@ -271,12 +273,29 @@ class DocumentationGenerator(object):
             if getattr(field, 'required', False):
                 data['required'].append(name)
 
-            data_type = field.type_label
+            data_items = None
+            if isinstance(field, HyperlinkedRelatedField):
+                data_format = reverse(field.view_name, args=[0])
+                data_format = data_format.replace(
+                    '0',
+                    '{{{}}}'.format(field.lookup_field),
+                )
+                if field.many:
+                    data_type = 'array'
+                    data_items = {
+                        'type': 'string',
+                        'format': data_format,
+                    }
+                    data_format = None
+                else:
+                    data_type = 'string'
+            else:
+                data_type = field.type_label
 
-            # guess format
-            data_format = 'string'
-            if data_type in BaseMethodIntrospector.PRIMITIVES:
-                data_format = BaseMethodIntrospector.PRIMITIVES.get(data_type)[0]
+                # guess format
+                data_format = 'string'
+                if data_type in BaseMethodIntrospector.PRIMITIVES:
+                    data_format = BaseMethodIntrospector.PRIMITIVES.get(data_type)[0]
 
             description = getattr(field, 'help_text', '')
             if not description or description.strip() == '':
@@ -284,11 +303,14 @@ class DocumentationGenerator(object):
             f = {
                 'description': description,
                 'type': data_type,
-                'format': data_format,
                 'required': getattr(field, 'required', False),
                 'defaultValue': get_resolved_value(field, 'default'),
                 'readOnly': getattr(field, 'read_only', None),
             }
+            if data_format:
+                f['format'] = data_format
+            if data_items:
+                f['items'] = data_items
 
             # Min/Max values
             max_val = getattr(field, 'max_val', None)
